@@ -2876,7 +2876,7 @@
             (and (not generated?)
                  core?
                  (not (:clj-kondo.impl/generated (meta parent-call)))
-                 (one-of core-sym [do fn defn defn-
+                 (one-of core-sym [do fn fn* defn defn-
                                    let when-let loop binding with-open
                                    doseq try when when-not when-first
                                    when-some future]))]
@@ -2885,6 +2885,39 @@
                                             :type :unused-value
                                             :message "Unused value"
                                             :filename (:filename ctx))))))))
+
+(defn update-literal-fn-ctx [ctx expr]
+  (cond-> (assoc ctx :arg-types nil :in-fn-literal true)
+    (:clj-kondo.impl/fn-has-first-arg (meta expr))
+    (update :bindings assoc '% {})))
+
+(defn analyze-literal-fn! [lang ctx expr]
+  (lint-unused-value ctx expr)
+  (when (and (:in-fn-literal ctx)
+             (not (:clj-kondo.impl/generated expr)))
+    (findings/reg-finding! ctx (assoc (meta expr)
+                                      :filename (:filename ctx)
+                                      :level :error
+                                      :type :syntax
+                                      :message "Nested #()s are not allowed")))
+  (when (identical? :edn lang)
+    (findings/reg-finding! ctx (assoc (meta expr)
+                                      :filename (:filename ctx)
+                                      :level :error
+                                      :type :syntax
+                                      :message "#()s are not allowed in EDN"))))
+
+(defn expand-fns
+  "For every child of expr (assumed to be a call) expand function
+  literals (i.e. #(...) forms) to (fn* ...) forms and mark these as expanded."
+  [expr]
+  (update expr :children
+          (fn [children]
+            (for [node children]
+              (cond-> node
+                (identical? :fn (tag node))
+                (-> macroexpand/expand-fn
+                    (vary-meta assoc :clj-kondo.impl/expanded? true)))))))
 
 #_(requiring-resolve 'clojure.set/union)
 
@@ -2896,7 +2929,7 @@
                        (:quoted ctx))
                  (meta/lift-meta-content2 (dissoc ctx :arg-types) expr)
                  expr)
-          t (tag expr)
+          t (if (:clj-kondo.impl/expanded? (meta expr)) :exp-fn (tag expr))
           {:keys [row col]} (meta expr)
           arg-count (count (rest children))]
       (utils/handle-ignore ctx expr)
@@ -2963,27 +2996,15 @@
                  (analyze-children (update ctx
                                            :callstack #(cons [nil t] %))
                                    children))
-        :fn (do
-              (lint-unused-value ctx expr)
-              (when (and (:in-fn-literal ctx)
-                         (not (:clj-kondo.impl/generated expr)))
-                (findings/reg-finding! ctx (assoc (meta expr)
-                                                  :filename (:filename ctx)
-                                                  :level :error
-                                                  :type :syntax
-                                                  :message "Nested #()s are not allowed")))
-              (when (identical? :edn lang)
-                (findings/reg-finding! ctx (assoc (meta expr)
-                                                  :filename (:filename ctx)
-                                                  :level :error
-                                                  :type :syntax
-                                                  :message "#()s are not allowed in EDN")))
-              (let [expanded-node (macroexpand/expand-fn expr)
-                    m (meta expanded-node)
-                    has-first-arg? (:clj-kondo.impl/fn-has-first-arg m)]
-                (recur (cond-> (assoc ctx :arg-types nil :in-fn-literal true)
-                         has-first-arg? (update :bindings assoc '% {}))
-                       expanded-node)))
+
+        :exp-fn (do (analyze-literal-fn! lang ctx expr)
+                    (recur (update-literal-fn-ctx ctx expr)
+                           (vary-meta expr assoc :clj-kondo.impl/expanded? false)))
+        :fn (do (analyze-literal-fn! lang ctx expr)
+                (let [expanded-node (macroexpand/expand-fn expr)]
+                  (recur (update-literal-fn-ctx ctx expanded-node)
+                         expanded-node)))
+
         :token
         (let [edn? (= :edn lang)]
           (if (or edn?
@@ -3077,7 +3098,7 @@
                                                      :full-fn-name full-fn-name
                                                      :row row
                                                      :col col
-                                                     :expr expr})
+                                                     :expr (expand-fns expr)})
                               _ (dorun ret) ;; realize all returned expressions
                                             ;; to not be bitten by laziness
                               maybe-call (some #(when (= id (:id %)) %) ret)]

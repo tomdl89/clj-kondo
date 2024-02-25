@@ -19,7 +19,8 @@
 ;;; export rewrite-clj functions
 
 (defn tag [expr]
-  (node/tag expr))
+  (when (satisfies? node/Node expr)
+    (node/tag expr)))
 
 (def map-node seq/map-node)
 (def vector-node seq/vector-node)

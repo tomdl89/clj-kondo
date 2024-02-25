@@ -24,6 +24,7 @@ For a list of breaking changes, check [here](#breaking-changes).
 - [#2416](https://github.com/clj-kondo/clj-kondo/issues/2416): detect empty `require` and `:require` forms ([@NoahTheDuke](https://github.com/NoahTheDuke))
 - [#1786](https://github.com/clj-kondo/clj-kondo/issues/1786): Support `gen-interface` (by suppressing unresolved symbols)
 - [#2420](https://github.com/clj-kondo/clj-kondo/issues/2420): Detect uneven number of clauses in cond-> and cond->>
+- [#1923](https://github.com/clj-kondo/clj-kondo/issues/1923): Lint invalid fn name for threaded fn literals
 
 ## 2024.09.27
 
