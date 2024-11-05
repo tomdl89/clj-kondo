@@ -2876,7 +2876,7 @@
             (and (not generated?)
                  core?
                  (not (:clj-kondo.impl/generated (meta parent-call)))
-                 (one-of core-sym [do fn defn defn-
+                 (one-of core-sym [do fn fn* defn defn-
                                    let when-let loop binding with-open
                                    doseq try when when-not when-first
                                    when-some future]))]
