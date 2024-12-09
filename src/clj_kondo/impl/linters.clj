@@ -519,8 +519,7 @@
                                   :message (str
                                             (format "#'%s is deprecated"
                                                     (str fn-ns "/" fn-name))
-                                            (if (true? deprecated)
-                                              nil
+                                            (when-not (true? deprecated)
                                               (str " since " deprecated)))})))
       (when called-fn
         (when-let [loc (:redundant-fn-wrapper-parent-loc call)]
