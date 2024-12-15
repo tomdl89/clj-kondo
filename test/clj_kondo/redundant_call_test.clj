@@ -7,7 +7,7 @@
   ^:replace {:linters {:redundant-call {:level :warning}}})
 
 (deftest redundant-call-test
-  (doseq [sym `[-> ->> some-> some->> partial comp merge]]
+  (doseq [sym `[-> ->> some-> some->> partial comp merge max min dissoc disj into format]]
     (is (empty? (lint! (format "(%s 1 identity)" sym) config))))
   (doseq [sym `[-> ->> cond-> cond->> some-> some->> partial comp merge]]
     (assert-submaps
