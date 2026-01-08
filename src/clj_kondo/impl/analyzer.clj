@@ -3390,6 +3390,13 @@
                       (do
                         (types/add-arg-type-from-expr (update ctx :callstack conj [nil t]) expr)
                         (analyze-children ctx children)))))
+                :list ; Immediately called forms, e.g. ((foo :bar) :baz)
+                (let [analyzed (analyze-expression** ctx function)
+                      ret-tag (-> (first analyzed) :ret :tag)]
+                  (when (and ret-tag (not (types/match? ret-tag :ifn)))
+                    (reg-not-a-function! ctx function (types/label ret-tag)))
+                  (let [ctx (update ctx :callstack conj [nil (or ret-tag t)])]
+                    (analyze-children ctx (rest children))))
                 ;; catch-all
                 (do
                   (types/add-arg-type-from-expr ctx expr)

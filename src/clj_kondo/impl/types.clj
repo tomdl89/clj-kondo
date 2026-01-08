@@ -133,7 +133,7 @@
 (def misc-types #{:boolean :atom :regex :char})
 
 (defn nilable? [k]
-  (= "nilable" (namespace k)))
+  (some->> k namespace (= "nilable")))
 
 (defn unnil
   "Returns the non-nilable version of k when it's nilable. Returns k otherwise."

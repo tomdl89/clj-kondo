@@ -1357,7 +1357,55 @@
       :col 7
       :level :error
       :message "Expected: function, received: seq."})
-   (lint! "(comp (map inc (range)))" config)))
+   (lint! "(comp (map inc (range)))" config))
+  (assert-submaps2
+   '({:file "<stdin>"
+      :row 1
+      :col 6
+      :level :error
+      :message "Expected: number, received: function."})
+   (lint! "(inc (comp :a :b))" config)))
+
+(deftest immediately-called-forms-test
+  (is (empty? (lint! "((comp inc dec) 42)")))
+  (is (empty? (lint! "((map inc) 42)")))
+  (is (empty? (lint! "((vector 1 2) 42)")))
+  (is (empty? (lint! "(((juxt inc dec) 42) 0)")))
+  (assert-submaps2
+   '({:file "<stdin>"
+      :row 1
+      :col 2
+      :level :error
+      :message "a seq is not a function"})
+   (lint! "((map inc (range 42)) [1 2 3])" config))
+  (assert-submaps2
+   '({:file "<stdin>"
+      :row 1
+      :col 2
+      :level :error
+      :message "a list is not a function"})
+   (lint! "((list 1 2 3) [1 2 3])" config))
+  (assert-submaps2
+   '({:file "<stdin>"
+      :row 1
+      :col 2
+      :level :error
+      :message "a number is not a function"})
+   (lint! "((inc 7) 42)" config))
+  (assert-submaps2
+   '({:file "<stdin>"
+      :row 1
+      :col 2
+      :level :error
+      :message "a string is not a function"})
+   (lint! "((str 7) 42)" config))
+  (assert-submaps2
+   '({:file "<stdin>"
+      :row 1
+      :col 3
+      :level :error
+      :message "a string is not a function"})
+   (lint! "(((str 7) 42) 0)" config)))
 
 ;;;; Scratch
 
