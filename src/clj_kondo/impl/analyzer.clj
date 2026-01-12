@@ -901,7 +901,7 @@
        (node->line (:filename ctx) bv :syntax
                    (format "%s binding vector requires even number of forms" form-name))))))
 
-(defn assert-vector [ctx call expr]
+(defn assert-literal-vector [ctx call expr]
   (when expr
     (let [vec? (and expr (= :vector (tag expr)))]
       (if-not vec?
@@ -925,7 +925,7 @@
                             [[clojure.core let]
                              [cljs.core let]])
         bv-node (-> expr :children second)
-        valid-bv-node (assert-vector ctx call bv-node)]
+        valid-bv-node (assert-literal-vector ctx call bv-node)]
     (when (and current-let
                (not (:clj-kondo.impl/generated expr))
                (or (and parent-let (= parent-let let-parent)
@@ -1943,7 +1943,7 @@
   [ctx expr]
   (let [call (-> (:callstack ctx) first second) ;; can be with-redefs or binding
         children (next (:children expr))
-        binding-vector (assert-vector ctx call (first children))
+        binding-vector (assert-literal-vector ctx call (first children))
         _ (when binding-vector
             (lint-even-forms-bindings! ctx call binding-vector))
         bindings (:children binding-vector)
@@ -2269,6 +2269,31 @@
 (defn analyze-hash-set [ctx expr]
   (let [[fn-name & children] (:children expr)]
     (analyze-associative ctx children fn-name children)))
+
+(defn vec? [ctx arg]
+  ;; literal vector
+  (or (utils/vector-node? arg)
+      (and (= :token (tag arg))
+           (let [v (:value arg)]
+             ;; local binding
+             (or (= :vector (get-in ctx [:bindings v :tag]))
+                 ;; defined in this ns
+                 (and (simple-symbol? v)
+                      (let [{:keys [base-lang lang]} ctx
+                            this-ns (get-in ctx [:ns :name])
+                            ns (namespace/get-namespace ctx base-lang lang this-ns)]
+                        (= :vector (some-> ns :vars (get v) :type)))))))))
+
+(defn analyze-get [ctx expr]
+  (let [[_ & [associative k :as children]] (:children expr)]
+    (when (and (vec? ctx associative)
+               (not (or (nat-int? (:value k))
+                        (utils/symbol-token? k)))) ; for now, assume symbol points to int
+      (findings/reg-finding!
+       ctx
+       (node->line (:filename ctx) k :type-mismatch
+                   "key for vector must be a non-negative integer")))
+    (analyze-children ctx children false)))
 
 (defn analyze-ns-unmap [ctx base-lang lang ns-name expr]
   (let [[ns-expr sym-expr :as children] (rest (:children expr))]
@@ -2678,6 +2703,7 @@
                           (dissoc dissoc! disj disj! sorted-set-by) (analyze-dissoc ctx expr)
                           (array-map hash-map sorted-map) (analyze-map ctx expr)
                           (hash-set sorted-set create-struct) (analyze-hash-set ctx expr)
+                          get (analyze-get ctx expr)
                           ns
                           (when top-level?
                             [(analyze-ns-decl ctx expr)])

@@ -1141,6 +1141,8 @@
   (is (empty? (lint! "(-> {:x 10} (get :x))" config)))
   (is (empty? (lint! "(get [1 2 3] 1)" config)))
   (is (empty? (lint! "(-> [1 2 3] (get 1))" config)))
+  (is (empty? (lint! "(get {-7 :foo, -3 :bar} -3)" config)))
+  (is (empty? (lint! "(let [i 2] (get [1 2 3] i))" config)))
   (assert-submaps2
    '({:file "<stdin>", :row 1, :col 6, :level :error, :message #"ILookup.*received: keyword."})
    (lint! "(get :x {:x 10})" config))
@@ -1150,7 +1152,29 @@
   (assert-submaps2
    '({:file "<stdin>", :row 2, :col 19, :level :error, :message #"ILookup.*received: atom."})
    (lint! "(let [x (atom {:a 1})]
-             (get x :a))" config)))
+             (get x :a))" config))
+  (assert-submaps2
+   [{:file "<stdin>"
+     :row 1
+     :col 17
+     :level :error
+     :message "key for vector must be a non-negative integer"}]
+   (lint! "(get [:a :b :c] :a)" config))
+  (assert-submaps2
+   [{:file "<stdin>"
+     :row 1
+     :col 32
+     :level :error
+     :message "key for vector must be a non-negative integer"}]
+   (lint! "(let [foo [:a :b :c]] (get foo :a))" config))
+  (assert-submaps2
+   [{:file "<stdin>"
+     :row 1
+     :col 31
+     :level :error
+     :message "key for vector must be a non-negative integer"}]
+   (lint! "(def foo [:a :b :c]) (get foo :a)" config)))
+
 
 (deftest repeatedly-test
   (let [config {:linters {:type-mismatch {:level :error}}}]
