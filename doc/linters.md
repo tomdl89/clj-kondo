@@ -8,13 +8,16 @@ configuration. For general configurations options, go [here](config.md).
 
 - [Linters](#linters)
     - [Aliased namespace symbol](#aliased-namespace-symbol)
+    - [Await without async fn](#await-without-async-fn)
     - [Aliased namespace var usage](#aliased-namespace-var-usage)
+    - [Aliased referred var](#aliased-referred-var)
     - [Case](#case)
     - [Case duplicate test](#case-duplicate-test)
         - [Case quoted test](#case-quoted-test)
         - [Case symbol test constant](#case-symbol-test-constant)
     - [Clj-kondo config](#clj-kondo-config)
     - [Cond-else](#cond-else)
+    - [Conditional build-up](#conditional-build-up)
     - [Condition always true](#condition-always-true)
     - [Conflicting-alias](#conflicting-alias)
     - [Consistent-alias](#consistent-alias)
@@ -37,6 +40,7 @@ configuration. For general configurations options, go [here](config.md).
     - [Docstring leading trailing whitespace](#docstring-leading-trailing-whitespace)
     - [Duplicate map key](#duplicate-map-key)
     - [Duplicate require](#duplicate-require)
+    - [Duplicate refer](#duplicate-refer)
     - [Duplicate set key](#duplicate-set-key)
     - [Duplicate field name](#duplicate-field-name)
     - [Duplicate key args](#duplicate-key-args)
@@ -54,6 +58,7 @@ configuration. For general configurations options, go [here](config.md).
     - [Def + fn instead of defn](#def--fn-instead-of-defn)
     - [Destructured or binding of same map](#destructured-or-binding-of-same-map)
     - [Inline def](#inline-def)
+    - [Destructured or always evaluates](#destructured-or-always-evaluates)
     - [Invalid arity](#invalid-arity)
     - [Conflicting arity](#conflicting-arity)
     - [Reduce without initial value](#reduce-without-initial-value)
@@ -71,11 +76,15 @@ configuration. For general configurations options, go [here](config.md).
     - [Missing map value](#missing-map-value)
     - [Unresolved protocol method](#unresolved-protocol-method)
     - [Missing protocol method](#missing-protocol-method)
+    - [Protocol method arity mismatch](#protocol-method-arity-mismatch)
+    - [Missing protocol method arity](#missing-protocol-method-arity)
     - [Missing test assertion](#missing-test-assertion)
+    - [Is message not string](#is-message-not-string)
     - [Namespace name mismatch](#namespace-name-mismatch)
     - [Nil return from if-like forms](#nil-return-from-if-like-forms)
     - [Non-arg vec return type hint](#non-arg-vec-return-type-hint)
     - [Not empty?](#not-empty)
+    - [Not nil?](#not-nil)
     - [Plus one](#plus-one)
     - [Private call](#private-call)
     - [Protocol method varargs](#protocol-method-varargs)
@@ -83,13 +92,17 @@ configuration. For general configurations options, go [here](config.md).
     - [Var same name except case](#var-same-name-except-case)
     - [Redundant do](#redundant-do)
     - [Redundant call](#redundant-call)
+    - [Redundant declare](#redundant-declare)
     - [Redundant fn wrapper](#redundant-fn-wrapper)
+    - [If x x y](#if-x-x-y)
     - [Redundant ignore](#redundant-ignore)
     - [Redundant nested call](#redundant-nested-call)
     - [Redundant let](#redundant-let)
     - [Redundant let binding](#redundant-let-binding)
     - [Redundant str call](#redundant-str-call)
+    - [Redundant primitive coercion](#redundant-primitive-coercion)
     - [Refer](#refer)
+    - [Refer clojure exclude unresolved var](#unresolved-excluded-var)
     - [Refer all](#refer-all)
     - [Schema misplaced return](#schema-misplaced-return)
     - [Self-requiring namespace](#self-requiring-namespace)
@@ -112,12 +125,14 @@ configuration. For general configurations options, go [here](config.md).
     - [Unknown :require option](#unknown-require-option)
     - [Unreachable code](#unreachable-code)
     - [Unused import](#unused-import)
+    - [Unused excluded var](#unused-excluded-var)
     - [Unresolved namespace](#unresolved-namespace)
     - [Unresolved symbol](#unresolved-symbol)
         - [:exclude-patterns](#exclude-patterns)
     - [Unresolved var](#unresolved-var)
     - [Unsorted imports](#unsorted-imports)
     - [Unsorted required namespaces](#unsorted-required-namespaces)
+    - [Unquote outside syntax-quote](#unquote-outside-syntax-quote)
     - [Unused namespace](#unused-namespace)
     - [Unused private var](#unused-private-var)
     - [Unused referred var](#unused-referred-var)
@@ -170,6 +185,26 @@ configuration. For general configurations options, go [here](config.md).
 ```
 
 *Example message:* `Namespace only aliased but wasn't loaded: clojure.data.xml`
+
+### Aliased referred var
+
+*Keyword:* `:aliased-referred-var`.
+
+*Description:* warn when a var is both referred and accessed via an alias in the same namespace.
+
+*Default level:* `:info`.
+
+*Example trigger:*
+
+```clojure
+(ns foo
+  (:require [clojure.set :as set :refer [union]]))
+
+(set/union #{1} #{2})
+(union #{3} #{4})
+```
+
+*Example message:* `Var union is referred but used via alias: set`
 
 ### Case
 
@@ -270,6 +305,28 @@ doesn't check for literally `true` values of vars since this is often a dev/prod
 *Example trigger:* `(if odd? :odd :even)`.
 
 *Example message:* `Condition always true`.
+
+### Conditional build-up
+
+*Keyword:* `:conditional-build-up`.
+
+*Description:* warn when a `let` repeatedly rebinds the same local map using forms like `(if pred (assoc m ...) m)`, which can often be written more clearly with `cond->`.
+
+*Default level:* `:off`.
+
+*Example trigger:*
+
+``` clojure
+(let [m {}
+      m (if (:a input) (assoc m :a 1) m)
+      m (if (:b input) (assoc m :b 2) m)
+      m (if (:c input) (assoc m :c 3) m)
+      m (if (:d input) (assoc m :d 4) m)
+      m (if (:e input) (assoc m :e 5) m)]
+  m)
+```
+
+*Example message:* `Prefer cond-> to build a map with successive conditional assocs.`
 
 ### Conflicting-alias
 
@@ -752,6 +809,21 @@ Explanation by Bozhidar Batsov:
 
 *Example message:* `duplicate require of clojure.string`
 
+### Duplicate refer
+
+*Keyword:* `:duplicate-refer`.
+
+*Description:* warns on var that has been referred more than once in a `:refer` or `:refer-macros` vector.
+
+*Example trigger:*
+
+``` clojure
+(ns foo
+  (:require [clojure.set :refer [union union]]))
+```
+
+*Example message:* `Duplicate refer: union`
+
 ### Duplicate set key
 
 *Keyword:* `:duplicate-set-key`.
@@ -922,6 +994,25 @@ e.g. `(= 0.1 x)`. In many cases this can lead to issues due to rounding errors.
 
 *Example message:* `Format string expects 1 arguments instead of 2.`.
 
+### Hook
+
+*Keyword:* `:hook`.
+
+*Description:* a `:macroexpand` or `:analyze-call` hook (including
+auto-extracted [macros from source](hooks.md#macros-from-source))
+threw while loading or while expanding a call. The finding points at
+the call site so editors via flycheck/clojure-lsp surface the
+failure.
+
+*Default level:* `:error`.
+
+*Example trigger:* a `defmacro` marked with
+`{:clj-kondo/macroexpand-hook true}` whose body references an
+unresolved symbol.
+
+*Example message:* `Error while loading hook for my.app/my-let: Could
+not resolve symbol: undefined-helper`.
+
 ### Def + fn instead of defn
 
 *Keyword:* `:def-fn`.
@@ -997,6 +1088,23 @@ for more details and discussion.
 *Example trigger:* `(defn foo [] (def x 1))`.
 
 *Example message:* `inline def`.
+
+### Destructured or always evaluates
+
+*Keyword:* `:destructured-or-always-evaluates`
+
+*Description:* Warn when an `:or` default value in a destructuring contains an
+expression that always evaluates, e.g. a function call.
+
+*Default level:* `:off`
+
+*Example trigger:*
+
+```clojure
+(let [{:keys [x] :or {x (f1)}} {:x 1}] x)
+```
+
+*Example message:* `Default :or value is always evaluated.`
 
 ### Invalid arity
 
@@ -1305,6 +1413,52 @@ misses a value.
 
 *Example message:* `Missing protocol method(s): bar`.
 
+### Protocol method arity mismatch
+
+*Keyword:* `:protocol-method-arity-mismatch`.
+
+*Description:* warn when a protocol method is implemented with an arity that doesn't match any arity declared in the protocol.
+
+*Default level:* `:warning`.
+
+*Example trigger:*
+
+``` clojure
+(defprotocol AProtocol
+  (bar [a b])
+  (baz [a] [a b] [a b c]))
+
+(deftype Foo [a b c]
+  AProtocol
+  (bar [x] a)             ;; wrong: bar only accepts arity 2
+  (baz [x] b)             ;; ok
+  (baz [x y z w] 0))      ;; wrong: baz does not accept arity 4
+```
+
+*Example message:* `Protocol method bar is implemented with arity 1 but expects 2`.\
+*Example message:* `Protocol method baz is implemented with arity 4 but expects 1, 2, 3`.
+
+### Missing protocol method arity
+
+*Keyword:* `:missing-protocol-method-arity`.
+
+*Description:* warn when a protocol method is implemented but not all declared arities are covered.
+
+*Default level:* `:off`.
+
+*Example trigger:*
+
+``` clojure
+(defprotocol P
+  (bar [a] [a b] [a b c]))
+
+(deftype T []
+  P
+  (bar [this] :ok))  ;; missing arities 2 and 3
+```
+
+*Example message:* `Protocol method bar arities 2, 3 are not implemented`.
+
 ### Missing test assertion
 
 *Keyword:* `:missing-test-assertion`.
@@ -1321,6 +1475,41 @@ misses a value.
 ```
 
 *Example message:* `missing test assertion`.
+
+### Is message not string
+
+*Keyword:* `:is-message-not-string`.
+
+*Description:* warn when `clojure.test/is` receives a non-string message argument. This linter relies on the `:type-mismatch` linter being enabled to perform type checking.
+
+*Default level:* `:info`.
+
+*Example trigger:*
+
+``` clojure
+(require '[clojure.test :refer [is]])
+(is (= 1 1) 42)
+```
+
+*Example message:* `Test assertion message should be a string`.
+
+*Config:* to suppress the above warning:
+
+``` clojure
+{:linters {:is-message-not-string {:level :off}}}
+```
+
+You can also disable this linter inline:
+
+``` clojure
+(is (= 1 1) ^{:clj-kondo/ignore [:is-message-not-string]} 42)
+```
+
+or
+
+``` clojure
+(is (= 1 1) #_:clj-kondo/ignore 42)
+```
 
 ### Namespace name mismatch
 
@@ -1378,6 +1567,34 @@ Read [this](https://github.com/clj-kondo/clj-kondo/issues/1331) issue for more b
 *Example trigger:* `(not (empty? []))`
 
 *Example message:* `use the idiom (seq x) rather than (not (empty? x))`.
+
+### Not nil?
+
+*Keyword:* `:not-nil?`
+
+*Description:* warn on `(not (nil? x))` and suggest `(some? x)` instead. Also detects `(when-not (nil? x) ...)` and `(if-not (nil? x) ...)` patterns.
+
+*Default level:* `:off`
+
+*Example triggers:*
+
+```clojure
+(not (nil? x))
+(when-not (nil? x) :foo)
+(if-not (nil? x) :foo :bar)
+```
+
+*Example messages:*
+
+- `Use (some? x) instead of (not (nil? x))`
+- `Use (when (some? x) ...) instead of (when-not (nil? x) ...)`
+- `Use (if (some? x) ...) instead of (if-not (nil? x) ...)`
+
+*Config:*
+
+```clojure
+{:linters {:not-nil? {:level :warning}}}
+```
 
 ### Plus one
 
@@ -1508,6 +1725,47 @@ warn on additional vars.
 
 *Example message:* `Single arg use of -> always returns the arg itself`.
 
+### Redundant declare
+
+*Keyword:* `:redundant-declare`.
+
+*Description:* warn when `declare` is used after a var is already defined in the same namespace.
+
+*Default level:* `:warning`.
+
+The normal pattern of using `declare` is to forward-declare a var before it is defined, allowing mutual recursion or other forward references. Using `declare` after a var is already defined (with `def`, `defn`, etc.) is redundant since the var already exists.
+
+*Example trigger:* `(defn foo []) (declare foo)`.
+
+*Example message:* `Redundant declare: foo`.
+
+*Config:*
+
+```clojure
+{:linters {:redundant-declare {:level :off}}}
+```
+
+Note: Multiple `declare` statements for the same var are considered redundant. Only the first `declare` is necessary.
+
+### Redundant format
+
+*Keyword*: `:redundant-format`
+
+*Description:* warn when format strings contain no format specifiers.
+
+*Default level:* `:info`.
+
+This linter detects calls to `format`, `printf`, and logging functions (`errorf`, `infof`, `logf`, etc.) where the format string contains no placeholders (like `%s`, `%d`, etc.). Such calls are redundant since the format string will be returned as-is without any formatting.
+
+*Example triggers:*
+* `(format "hello")`
+* `(log/errorf "error message")`
+* `(log/logf :info "log message")`
+
+Note: Format strings containing only `%%` (escaped percent) or `%n` (newline) are also considered to have no format specifiers.
+
+*Example message:* `Format string contains no format specifiers`.
+
 ### Redundant fn wrapper
 
 *Keyword*: `:redundant-fn-wrapper`
@@ -1519,6 +1777,25 @@ warn on additional vars.
 *Example trigger:* `#(inc %)`.
 
 *Example message:* `Redundant fn wrapper`.
+
+### If x x y
+
+*Keyword:* `:if-x-x-y`
+
+*Description:* warn on `(if x x y)` and suggest `(or x y)` instead when `x` is a
+simple symbol, so the rewrite does not change evaluation count.
+
+*Default level:* `:off`
+
+*Example trigger:* `(if x x y)`
+
+*Example message:* `If condition and then branch are the same; use (or x y)`
+
+*Config:*
+
+```clojure
+{:linters {:if-x-x-y {:level :warning}}}
+```
 
 ### Redundant ignore
 
@@ -1596,6 +1873,43 @@ is passed to a `str` that is already a string, which makes the `str` unnecessary
 
 *Example message:* `Single argument to str already is a string`.
 
+### Redundant primitive coercion
+
+*Keyword*: `:redundant-primitive-coercion`
+
+*Description:* warn on redundant primitive coercion calls. The warning arises when a
+primitive coercion function (`double`, `float`, `long`, `int`, `short`, `byte`, `char`,
+`boolean`) is applied to an expression that already returns that primitive type.
+
+*Default level:* `:info`.
+
+*Example triggers:*
+
+``` clojure
+;; Nested coercions
+(double (double 1))
+
+;; Function already returns double
+(defn foo ^double [] 1.0)
+(double (foo))
+
+;; Function already returns float
+(defn bar ^float [] 1.0)
+(float (bar))
+```
+
+*Example message:* `Redundant double coercion - expression already has type double`.
+
+*Note:* This linter relies on type information from the `:type-mismatch` linter.
+If `:type-mismatch` is disabled, type tracking will not be available and the linter
+will not detect redundant coercions.
+
+*Limitations:*
+
+- Java interop method return types are not tracked. Calls like `(double (.doubleValue x))`
+  will not be detected as redundant because clj-kondo does not infer return types from
+  Java method calls.
+
 ### Refer
 
 *Keyword:* `:refer`
@@ -1614,6 +1928,30 @@ Example warning: `require with :refer`.
 ```clojure
 {:linters {:refer {:exclude [clojure.set]}}}
 ```
+
+### Unused excluded var
+
+*Keyword:* `:unused-excluded-var`.
+
+*Description:* warns when `:refer-clojure :exclude` contains vars that are not redefined in the current namespace. Locals with the same name as an excluded var also count as a redefinition and will suppress this warning.
+
+*Default level:* `:info`.
+
+*Example trigger:* `(ns foo (:refer-clojure :exclude [read]))`
+
+*Example message:* `Unused excluded var: read`.
+
+### Unresolved excluded var
+
+*Keyword:* `:unresolved-excluded-var`.
+
+*Description:* warns when `:refer-clojure :exclude` contains vars that do not exist in clojure.core or cljs.core.
+
+*Default level:* `:info`.
+
+*Example trigger:* `(ns foo (:refer-clojure :exclude [nonexistent-var]))`
+
+*Example message:* `Unresolved excluded var: nonexistent-var`.
 
 ### Refer all
 
@@ -2191,6 +2529,30 @@ keeping the namespace name as is:
 ```
 
 Possible values for `:sort` are `:case-insensitive` (default) and `:case-sensitive`.
+
+### Unquote outside syntax-quote
+
+*Keyword:* `:unquote-not-syntax-quoted`.
+
+*Description:* warns when unquote (`~`) or unquote-splicing (`~@`) is used outside of syntax-quote (`` ` ``).
+
+*Default level:* `:warning`.
+
+*Example trigger:* `~x`
+
+*Example message:* `Unquote (~) used outside syntax-quote`.
+
+### Await without async fn
+
+*Keyword:* `:await-without-async-fn`.
+
+*Description:* warns when `cljs.core/await` is used outside a function carrying `^:async` metadata. ClojureScript only.
+
+*Default level:* `:error`.
+
+*Example trigger:* `(defn f [] (await (js/Promise.resolve 1)))`
+
+*Example message:* `Use of await is only allowed in functions with ^:async metadata.`
 
 ### Unused namespace
 

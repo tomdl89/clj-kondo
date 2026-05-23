@@ -16,14 +16,14 @@
 
 (set! *warn-on-reflection* true)
 
-(def dev? (= "true" (System/getenv "CLJ_KONDO_DEV")))
+(def dev? (delay (= "true" (System/getenv "CLJ_KONDO_DEV"))))
 
 (def cache-version "v1")
 
 (defn format-output [config]
   (let [output-cfg (:output config)]
     (if-let [^String pattern (-> output-cfg :pattern)]
-      (fn [{:keys [:filename :row :end-row :col :end-col :level :message :type] :as _finding}]
+      (fn [{:keys [filename row end-row col end-col level message type] :as _finding}]
         (-> pattern
             (str/replace "{{filename}}" filename)
             (str/replace "{{row}}" (str row))
@@ -34,7 +34,7 @@
             (str/replace "{{LEVEL}}" (str/upper-case (name level)))
             (str/replace "{{message}}" message)
             (str/replace "{{type}}" (str type))))
-      (fn [{:keys [:filename :row :col :level :message :type langs] :as _finding}]
+      (fn [{:keys [filename row col level message type langs] :as _finding}]
         (str filename ":"
              row ":"
              col ": "
@@ -140,7 +140,8 @@
                 (map str)
                 (filter #(not (contains? local-config-paths-set %))))
           (fs/glob cfg-dir glob
-                   {:max-depth (if (str/starts-with? glob "imports")
+                   {:follow-links true
+                    :max-depth (if (str/starts-with? glob "imports")
                                  4
                                  3)}))))
 
@@ -373,7 +374,7 @@
   (loop []
     (when-let [group (.pollFirst deque)]
       (try
-        (doseq [{:keys [:filename :source :lang :uri]} group]
+        (doseq [{:keys [filename source lang uri]} group]
           (ana/analyze-input ctx filename uri source lang dev?))
         (catch Exception e (binding [*out* *err*]
                              (prn e))))
@@ -405,6 +406,7 @@
     default-language))
 
 (def path-separator (System/getProperty "path.separator"))
+(def path-separator-pat (re-pattern path-separator))
 
 (defn classpath? [f]
   (str/includes? f path-separator))
@@ -453,12 +455,12 @@
                   1
 
                   (classpath? path)
-                  (files-count (str/split path (re-pattern path-separator)) ctx)
+                  (files-count (str/split path path-separator-pat) ctx)
 
                   :else 0))))
        (reduce + 0)))
 
-(defn schedule [ctx {:keys [:filename :source :lang :uri] :as m} dev?]
+(defn schedule [ctx {:keys [filename source lang uri] :as m} dev?]
   (if (:parallel ctx)
     (swap! (:sources ctx) conj m)
     (when (or (:analysis ctx) (not (:skip-lint ctx)))
@@ -495,7 +497,7 @@
                     (when-not (:skip-lint ctx)
                       (utils/stderr "[clj-kondo]" jar-name "was already linted, skipping"))
                     (do (run! #(schedule ctx (assoc % :lang (lang-from-file (:filename %) default-language))
-                                         dev?)
+                                         @dev?)
                               (sources-from-jar ctx file canonical? use-import-dir))
                         (when-not (:skip-lint ctx)
                           (swap! (:mark-linted ctx) conj [skip-mark path])))))
@@ -510,9 +512,9 @@
                                    :uri (->uri nil nil fn)
                                    :source (slurp file)
                                    :lang (lang-from-file path default-language)}
-                              dev?)))))
+                              @dev?)))))
             ;; assume directory
-            (run! #(schedule ctx (assoc % :lang (lang-from-file (:filename %) default-language)) dev?)
+            (run! #(schedule ctx (assoc % :lang (lang-from-file (:filename %) default-language)) @dev?)
                   (sources-from-dir ctx file canonical? use-import-dir)))
           (= "-" path)
           (when-not (excluded? ctx filename-fallback)
@@ -520,11 +522,10 @@
                            :source (slurp *in*)
                            :lang (if filename-fallback
                                    (lang-from-file filename-fallback default-language)
-                                   default-language)} dev?))
+                                   default-language)} @dev?))
           (classpath? path)
           (run! #(process-file ctx % default-language canonical? filename-fallback use-import-dir)
-                (str/split path
-                           (re-pattern path-separator)))
+                (str/split path path-separator-pat))
           :else
           (when-not (:skip-lint ctx)
             (findings/reg-finding! ctx
@@ -539,7 +540,7 @@
                                     :row 0
                                     :message "file does not exist"}))))
       (catch Throwable e
-        (if dev?
+        (if @dev?
           (throw e)
           (when-not (:skip-lint ctx)
             (findings/reg-finding! ctx {:filename (if canonical?
@@ -596,7 +597,7 @@
     (when (and (:parallel ctx)
                (or (:analysis ctx)
                    (not (:skip-lint ctx))))
-      (parallel-analyze ctx @(:sources ctx) dev?))
+      (parallel-analyze ctx @(:sources ctx) @dev?))
     (when (and cache-dir (:dependencies ctx))
       (doseq [[mark path] @(:mark-linted ctx)]
         (let [skip-file (io/file cache-dir "skip" mark)]
@@ -619,7 +620,8 @@
                                 :macro :private :deprecated
                                 :fixed-arities :varargs-min-arity
                                 :name :ns :top-ns :imported-ns :imported-var
-                                :arities :type :class :methods])))
+                                :arities :type :class :methods
+                                :method-arities])))
             vars))
 
 (defn deprecated-val [deprecated]
@@ -713,22 +715,25 @@
   (let [print-debug? (:debug config)
         filter-output (not-empty (-> config :output :include-files))
         remove-output (not-empty (-> config :output :exclude-files))
-        re-find (:re-find-memo ctx)]
+        re-find (:re-find-memo ctx)
+        cljc-features-count (count (config/cljc-features config))]
     (for [[[_filename _row _col type cljc] findings] findings
-          :when (or
-                 ;; always pass when not .cljc
-                 (not cljc)
-                 ;; always pass when it's not one of these
-                 (and (not= :redundant-do type)
-                      (not= :redundant-call type)
-                      (not= :redundant-let type)
-                      (not= :redundant-let-binding type)
-                      (not= :single-logical-operand type)
-                      (not= :redundant-nested-call type)
-                      (not= :redundant-ignore type)
-                      (not= :redundant-fn-wrapper type))
-                 ;; but if we get here, then the amount of findings has to be bigger than 1
-                 (> (count findings) 1))
+          :when (or ;; keep findings when:
+                  ;; 1) not multi-dialect
+                  (not cljc)
+                  ;; 2) not linter of interest (and multi-dialect)
+                  (and (not= :redundant-do type)
+                       (not= :redundant-call type)
+                       (not= :redundant-let type)
+                       (not= :redundant-let-binding type)
+                       (not= :single-logical-operand type)
+                       (not= :redundant-nested-call type)
+                       (not= :redundant-ignore type)
+                       (not= :redundant-fn-wrapper type)
+                       (not= :unused-excluded-var type))
+                  ;; 3) findings count matches features analyzed (and multi-dialect and linter of interest)
+                  ;;    (we exclude when all dialects do not agree on finding for a linter of interest).
+                  (= (count findings) cljc-features-count))
           f (collapse-cljc-findings findings)
           :let [filename (:filename f)
                 tp (:type f)
@@ -751,10 +756,8 @@
 
 (defn config-hash [cfg]
   (let [config-bytes (.getBytes (str cfg))
-        digest (java.security.MessageDigest/getInstance "SHA-256")
-        config-hash (.digest digest config-bytes)
-        config-hash (format "%032x" (BigInteger. 1 config-hash))]
-    config-hash))
+        digest (java.security.MessageDigest/getInstance "SHA-256")]
+    (utils/bytes->hex (.digest digest config-bytes))))
 
 ;;;; Scratch
 

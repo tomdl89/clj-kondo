@@ -251,8 +251,34 @@ Some linters are not enabled by default. Right now these linters are:
 - `:warn-on-reflection`: warns about not setting `*warn-on-reflection*` to true in Clojure
 namespaces.
 - `:unused-value`: warns about unused values.
+- `:if-x-x-y`: warns on `(if x x y)` when it can be simplified to `(or x y)` safely.
+- `:conditional-build-up`: warn when a `let` repeatedly rebinds the same local map via `(if pred (assoc m ...) m)`; suggests `cond->`.
 - `:redundant-call`: warns about redundant calls, mostly macros and functions that return their first argument as a no-op
 - `:redundant-str-call`: warn about unnecessary `str` calls
+- `:def-fn`: warn when `def` + `fn` can be replaced by `defn`.
+- `:redundant-let-binding`: warn on redundant let bindings.
+- `:unsorted-imports`: warns on non-alphabetically sorted imports in `ns` and `require` forms.
+- `:reduce-without-init`: warn when reduce is called without an explicit initial value.
+- `:not-nil?`: warn on `(not (nil? x))` and suggest `(some? x)` instead.
+- `:if-nil-return`: warn when if-like form explicitly returns nil from either branch.
+- `:case-symbol-test`: warn on symbol test constants in `case`.
+- `:bb.edn-task-missing-docstring`: warn on missing docstring for map tasks.
+- `:main-without-gen-class`: warn when -main function is present without corresponding `:gen-class`.
+- `:redundant-fn-wrapper`: warn on redundant function wrapper.
+- `:keyword-binding`: warn on keywords in binding vectors.
+- `:aliased-namespace-symbol`: warn when the namespace of a qualified symbol has a defined alias.
+- `:dynamic-var-not-earmuffed`: warn when dynamic var doesn't have an earmuffed name.
+- `:equals-false`: warn on usage of `(= false x)` or `(= x false)` rather than `(false? x)`.
+- `:equals-true`: warn on usage of `(= true x)` or `(= x true)` rather than `(true? x)`.
+- `:equals-nil`: warn on usage of `(= nil x)` or `(= x nil)` rather than `(nil? x)`.
+- `:equals-float`: warn on usage of comparison with `=` on floating point numbers.
+- `:plus-one`: warn on usages of `+` that can be replaced with `inc`.
+- `:minus-one`: warn on usages of `-` that can be replaced with `dec`.
+- `:unused-alias`: warn on unused alias introduced in ns form.
+- `:condition-always-true`: warn on a condition that evaluates to an always truthy constant.
+- `:equals-expected-position`: warn on usage of `=` with the expected constant not in the expected position.
+- `:missing-protocol-method-arity`: warn when a protocol method is implemented but not all declared arities are covered.
+- `:destructured-or-always-evaluates`: warn when an `:or` default value in a destructuring contains an expression that always evaluates.
 
 You can enable these linters by setting the `:level`:
 
@@ -581,7 +607,7 @@ These are some example configurations used in real projects. Feel free to create
 - [clj-kondo](https://github.com/clj-kondo/clj-kondo/blob/master/.clj-kondo/config.edn)
 - [rewrite-cljc](https://github.com/lread/rewrite-cljs-playground/blob/master/.clj-kondo/config.edn)
 
-Also see the [config](https://github.com/clj-kondo/config) project.
+Also see the [configs](https://github.com/clj-kondo/configs) project.
 
 ## Exporting and importing configuration
 
@@ -615,7 +641,7 @@ To activate the exported configuration in your local project, you can add the fo
 
 ### Sample Exports
 
-The clj-kondo team has provided config exports for some popular libraries in the [clj-kondo/config](https://github.com/clj-kondo/config) repo.
+The clj-kondo team has provided config exports for some popular libraries in the [clj-kondo/configs](https://github.com/clj-kondo/configs) repo.
 Let's take a look at its clj-kondo exports:
 
 ```shellsession:
@@ -646,7 +672,7 @@ resources
             └── config.edn
 ```
 
-The clj-kondo/config repo:
+The clj-kondo/configs repo:
 
 - Includes a `config.edn` for each library. This defines the clj-kondo export config.
 - Includes custom [hooks](hooks.md) for some libraries under `clj_kondo`.
@@ -662,18 +688,13 @@ For example, if the `claypoole` library itself wanted to export config, it would
 ### Importing
 
 Clj-kondo, when asked, will copy clj-kondo configs found in library dependencies.
-As an example, let's add [clj-kondo/config](#sample-exports) as a dependency.
+Many libraries ship their own clj-kondo configs inside their jars. Additionally, configs for popular libraries are available in the [clj-kondo/configs](https://github.com/clj-kondo/configs) repository. To import configs from your dependencies:
 
-1. Include `clj-kondo/config` in your `deps.edn`:
-    ```Clojure
-    {:deps {clj-kondo/config {:git/url "https://github.com/clj-kondo/config"
-                              :sha "c37c13ea09b6aaf23db3a7a9a0574f422bb0b4c2"}}}
-    ```
-2. Ensure a `.clj-kondo` directory exists, if necessary:
+1. Ensure a `.clj-kondo` directory exists, if necessary:
     ```
     $ mkdir .clj-kondo
     ```
-3. Then ask clj-kondo to copy configs like so:
+2. Then ask clj-kondo to copy configs like so:
     ```
     $ clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
     Configs copied:
@@ -683,7 +704,7 @@ As an example, let's add [clj-kondo/config](#sample-exports) as a dependency.
     - .clj-kondo/clj-kondo/rum
     - .clj-kondo/clj-kondo/slingshot
     ```
-4. Now enrichen clj-kondo's linting cache via:
+3. Now enrichen clj-kondo's linting cache via:
     ```
     $ clj-kondo --lint $(clojure -Spath) --dependencies --parallel
     ```

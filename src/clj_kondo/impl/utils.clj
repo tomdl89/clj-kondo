@@ -1,6 +1,6 @@
 (ns clj-kondo.impl.utils
   {:no-doc true}
-  (:refer-clojure :exclude [update-vals])
+  (:refer-clojure :exclude [update-vals eduction])
   (:require
    [babashka.fs :as fs]
    [clj-kondo.impl.analyzer.common :as common]
@@ -14,6 +14,7 @@
    [clj-kondo.impl.rewrite-clj.reader :refer [*reader-exceptions*]]
    [clojure.java.io :as io]
    [clojure.pprint :as pprint]
+   [clojure.set :as set]
    [clojure.string :as str]))
 
 (set! *warn-on-reflection* true)
@@ -61,6 +62,13 @@
     (apply println strs))
   nil)
 
+(defn bytes->hex
+  "Lowercase hex-encode a byte array. Output is exactly `2 * (alength bs)`
+  chars. Use this instead of `(map #(format \"%02x\" %) bs)` - that idiom
+  sign-extends negative `byte` primitives to 8-char ints (`-1` -> `\"ffffffff\"`)."
+  ^String [^bytes bs]
+  (format (str "%0" (* 2 (alength bs)) "x") (BigInteger. 1 bs)))
+
 (defn symbol-call
   "Returns symbol of call"
   [expr]
@@ -101,6 +109,28 @@
     splice? (update :children (fn [children]
                                 (map #(attach-branch* % lang) children)))))
 
+(defn linter-disabled? [ctx linter]
+  (= :off (get-in ctx [:config :linters linter :level])))
+
+(defn location [m]
+  (select-keys m [:filename :row :col :end-row :end-col]))
+
+(defn node->line [filename node t message]
+  (let [m (meta node)]
+    (assoc (location m)
+           :type t
+           :message message
+           :filename filename)))
+
+(defn- lint-unreachable-reader-conditional! [ctx k ts]
+  (when (and (= :default (:k k))
+             (seq ts)
+             (not (linter-disabled? ctx :unreachable-code)))
+    (common/reg-finding! ctx (node->line (:filename ctx)
+                                         k
+                                         :unreachable-code
+                                         "Unreachable code: default reader conditional branch should go last"))))
+
 (defn process-reader-conditional [ctx node lang splice?]
   (if (and node
            (= :reader-macro (node/tag node))
@@ -115,6 +145,7 @@
                                           :level :error
                                           :type :syntax
                                           :message "Feature should be a keyword")))
+        (lint-unreachable-reader-conditional! ctx k ts)
         (let [kw (:k k)
               default (or default
                           (when (= :default kw)
@@ -157,19 +188,6 @@
    (when-let [processed (process-reader-conditional ctx node lang splice?)]
      (select-lang-children ctx processed lang))))
 
-(defn node->line [filename node t message]
-  #_(when (and (= type :missing-docstring)
-               (not (:row (meta node))))
-      (prn node))
-  (let [m (meta node)]
-    {:type t
-     :message message
-     :row (:row m)
-     :end-row (:end-row m)
-     :end-col (:end-col m)
-     :col (:col m)
-     :filename filename}))
-
 (defn parse-string [s]
   (p/parse-string s))
 
@@ -179,20 +197,49 @@
 
 (def vconj (fnil conj []))
 
+(declare deep-merge)
+
+(defn- deep-assoc
+  "This code is extracted into a named function instead of being a lambda to avoid
+  re-allocating the lambda object in each call to `merge-with*`."
+  [m1 k v2]
+  (let [v1 (get m1 k ::empty)
+        new-v (if (identical? v1 ::empty)
+                v2
+                (deep-merge v1 v2))]
+    (if (identical? v1 new-v)
+      m1
+      (assoc m1 k new-v))))
+
+(defn- merge-with*
+  "More efficient implementation of `clojure.core/merge-with` for two maps with
+  `deep-merge` hardcoded as the combiner function."
+  [m1 m2]
+  (if (or (nil? m1) (nil? m2))
+    (or m1 m2 {})
+    (reduce-kv deep-assoc m1 m2)))
+
 (defn deep-merge
   "deep merge that also mashes together sequentials"
   ([])
   ([a] a)
   ([a b]
-   (cond (when-let [m (meta b)]
+   (cond (nil? b) a
+         (when-let [m (meta b)]
            (:replace m)) b
-         (and (map? a) (map? b)) (merge-with deep-merge a b)
+         (and (map? a) (map? b)) (merge-with* a b)
+         ;; we often get called on equal sets, let's optimize for that.
+         ;; set/union is better than `into` since it pours smaller into bigger.
+         (and (set? a) (set? b)) (if (= a b)
+                                   b
+                                   (set/union a b))
+         ;; Use reduce+conj instead of into to avoid transient roundtrips.
          (and (or (sequential? a) (set? a))
-              (or (sequential? b) (set? b))) (into a b)
-         (false? b) b
-         :else (or b a)))
+              (or (sequential? b) (set? b))) (reduce conj a b)
+         :else b))
   ([a b & more]
-   (apply merge-with deep-merge a b more)))
+   #_{:clj-kondo/ignore [:reduce-without-init]}
+   (reduce merge-with* (list* a b more))))
 
 (defn constant?
   "returns true of expr represents a compile time constant"
@@ -229,12 +276,12 @@
     (when (symbol? ?sym)
       ?sym)))
 
-(defn map-node-vals [{:keys [:children]}]
+(defn map-node-vals [{:keys [children]}]
   (take-nth 2 (rest children)))
 
 (defn map-node-get-value-node
   "Return value node from map node matching given keyword `kw`"
-  [{:keys [:children]} kw]
+  [{:keys [children]} kw]
   (loop [kvs (partition 2 children)]
     (let [kv (first kvs)]
       (cond
@@ -245,9 +292,6 @@
 (defmacro one-of [x elements]
   `(let [x# ~x]
      (case x# (~@elements) x# nil)))
-
-(defn linter-disabled? [ctx linter]
-  (= :off (get-in ctx [:config :linters linter :level])))
 
 (defn ctx-with-bindings [ctx bindings]
   (update ctx :bindings (fn [b]
@@ -300,6 +344,21 @@
                                    (conj! kept v) removed)
                             (recur (next xs) kept (conj! removed x))))
       [(persistent! kept) (persistent! removed)])))
+
+(defn eduction
+  "Identical to `clojure.core/eduction` but doesn't perform expensive and useless
+  argument manipulation."
+  [xform coll]
+  (->Eduction xform coll))
+
+(defn some'
+  "Like `clojure.core/some`, but uses a `reduce` to traverse the collection for
+  performance reasons (`reduce` is more efficient and allocation-free for
+  vectors)."
+  [pred coll]
+  (reduce #(when-let [r (pred %2)]
+             (reduced r))
+          nil coll))
 
 (defn resolve-ns [idacs base-lang lang ns]
   (case [base-lang lang]
@@ -365,7 +424,7 @@
                   (when unresolved?
                     (some #(resolve-call* idacs call % fn-name)
                           (into (vec
-                                 (keep (fn [[ns {:keys [:excluded]}]]
+                                 (keep (fn [[ns {:keys [excluded]}]]
                                          (when-not (contains? excluded fn-name)
                                            ns))
                                        refer-alls))
@@ -378,10 +437,7 @@
        (or
         (let [imported-var (:imported-var called-fn)
               seenv [imported-ns imported-var]]
-          (when (not (or
-                      (seen seenv)
-                      (and (not= fn-ns imported-ns)
-                           (not= fn-name imported-var))))
+          (when-not (seen seenv)
             (resolve-call idacs call call-lang imported-ns imported-var
                           unresolved? refer-alls (conj seen seenv))))
         ;; if we cannot find the imported var here, we fall back on called-fn
@@ -423,7 +479,6 @@
 (def windows? (-> (System/getProperty "os.name")
                   (str/lower-case)
                   (str/includes? "win")))
-
 
 (defn unixify-path
   "Convert dir separators in `s`, when on Windows, to forward slashes.
@@ -511,6 +566,36 @@
           {:ns ns
            :name var})
         (:callstack ctx)))
+
+(defn ignored? [expr linter]
+  (when-let [{:keys [linters] :as ignore} (:clj-kondo/ignore (meta expr))]
+    (or (identical? :all linters)
+        (true? ignore)
+        (if linters
+          (some #(identical? linter (:k %)) (:children linters))
+          (some #(identical? linter %) ignore)))))
+
+(let [not-found (Object.)]
+  (defn memoize'
+    "A more efficient version of `clojure.core/memoize` that is only restricted to
+  1- and 2-arity functions."
+    [f]
+    (let [mem (atom {})]
+      (fn
+        ([arg]
+         (let [val (get @mem arg not-found)]
+           (if (identical? val not-found)
+             (let [ret (f arg)]
+               (swap! mem assoc arg ret)
+               ret)
+             val)))
+        ([arg1 arg2]
+         (let [val (get (get @mem arg1) arg2 not-found)]
+           (if (identical? val not-found)
+             (let [ret (f arg1 arg2)]
+               (swap! mem update arg1 assoc arg2 ret)
+               ret)
+             val)))))))
 
 ;;;; Scratch
 

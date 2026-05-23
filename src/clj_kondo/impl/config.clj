@@ -40,6 +40,7 @@
               :duplicate-key-args {:level :warning}
               :missing-map-value {:level :error}
               :redefined-var {:level :warning}
+              :redundant-declare {:level :warning}
               :var-same-name-except-case {:level :warning}
               :unreachable-code {:level :warning}
               :datalog-syntax {:level :error}
@@ -67,7 +68,7 @@
                                             #_(riemann.streams/where [service event])
                                             ;; ignore all unresolved symbols in one-of:
                                             #_(clj-kondo.impl.utils/one-of)
-                                            (user/defproject) ;; ignore project.clj's defproject
+                                            (leiningen.core.project/defproject) ;; ignore project.clj's defproject
                                             (clojure.test/are [thrown? thrown-with-msg?])
                                             (cljs.test/are [thrown? thrown-with-msg?])
                                             (clojure.test/is [thrown? thrown-with-msg?])
@@ -80,6 +81,8 @@
                                     :exclude [#_foo.bar/baz]}
               :misplaced-docstring {:level :warning}
               :not-empty? {:level :warning}
+              :not-nil? {:level :off}
+              :if-x-x-y {:level :off}
               :deprecated-var {:level :warning
                                #_:exclude
                                #_{foo.foo/deprecated-fn
@@ -90,16 +93,19 @@
               :deprecated-namespace {:level :warning}
               :unused-referred-var {:level :warning
                                     :exclude {#_#_taoensso.timbre [debug]}}
+              :aliased-referred-var {:level :info}
               :unused-private-var {:level :warning}
               :refer {:level :off
                       #_:exclude
                       #_[clojure.test]}
               :refer-all {:level :warning
                           :exclude #{}}
+              :unresolved-excluded-var {:level :info}
               :use {:level :warning}
               :missing-else-branch {:level :warning}
               :if-nil-return {:level :off}
               :case-duplicate-test {:level :error}
+              :duplicate-refer {:level :warning}
               :case-quoted-test {:level :warning}
               :case-symbol-test {:level :off}
               :type-mismatch {:level :error}
@@ -112,6 +118,7 @@
                                  ;; different from str
                                  :aliases {#_clojure.string #_str}}
               :unused-import {:level :warning}
+              :unused-excluded-var {:level :info}
               :single-operand-comparison {:level :warning}
               :single-logical-operand {:level :warning}
               :redundant-nested-call {:level :info}
@@ -147,6 +154,9 @@
                                #_#_:exclude #{clojure.core/->}
                                #_#_:include #{clojure.core/conj!}}
               :redundant-str-call {:level :info}
+              :is-message-not-string {:level :info}
+              :redundant-primitive-coercion {:level :info}
+              :redundant-format {:level :info}
               :warn-on-reflection {:level :off
                                    :warn-only-on-interop true}
               :aliased-namespace-symbol {:level :off
@@ -182,7 +192,13 @@
               :do-template {:level :warning}
               :unresolved-protocol-method {:level :warning}
               :missing-protocol-method {:level :warning}
-              :locking-suspicious-lock {:level :warning}}
+              :protocol-method-arity-mismatch {:level :warning}
+              :missing-protocol-method-arity {:level :off}
+              :locking-suspicious-lock {:level :warning}
+              :destructured-or-always-evaluates {:level :off}
+              :unquote-not-syntax-quoted {:level :warning}
+              :await-without-async-fn {:level :error}
+              :conditional-build-up {:level :off}}
     ;; :hooks {:macroexpand ... :analyze-call ...}
     :lint-as {cats.core/->= clojure.core/->
               cats.core/->>= clojure.core/->>
@@ -253,34 +269,43 @@
                                 :filename (:filename utils/*ctx*)})
         nil)))
 
-(defn fq-syms->vecs
+(defn only-fq-syms-eduction
+  "Return an eduction of only fully qualified symbols."
   [fq-syms]
-  (keep (fn [fq-sym]
-          (when (symbol? fq-sym)
-            (if-let [ns* (namespace fq-sym)]
-              [(symbol ns*) (symbol (name fq-sym))]
-              (do (findings/reg-finding! utils/*ctx*
-                                         {:type :clj-kondo-config
-                                          :level :warning
-                                          :row 0
-                                          :col 0
-                                          :message (str "Configuration error. Expected fully qualified symbol, got: " fq-sym)
-                                          :filename (:filename utils/*ctx*)})
-                  nil))))
-        fq-syms))
+  (utils/eduction
+   (filter (fn [fq-sym]
+             (when (symbol? fq-sym)
+               (if (namespace fq-sym)
+                 true
+                 (do (findings/reg-finding! utils/*ctx*
+                                            {:type :clj-kondo-config
+                                             :level :warning
+                                             :row 0
+                                             :col 0
+                                             :message (str "Configuration error. Expected fully qualified symbol, got: " fq-sym)
+                                             :filename (:filename utils/*ctx*)})
+                     false)))))
+   fq-syms))
 
 (defn skip-args
   ([config linter]
    (some-> (get-in config [:linters linter :skip-args])
-           (fq-syms->vecs))))
+           (only-fq-syms-eduction))))
 
 (defn skip?
   "Used by invalid-arity linter. We optimize for the case that disable-within returns an empty sequence"
   ([config linter callstack]
-   (when-let [disabled (seq (skip-args config linter))]
-     (some (fn [disabled-sym]
-             (some #(= disabled-sym %) callstack))
-           disabled))))
+   (utils/some' (fn [disabled-fq-sym]
+                  (let [disabled-ns (namespace disabled-fq-sym)
+                        disabled-name (name disabled-fq-sym)]
+                    (utils/some' (fn [frame]
+                                   ;; Instead of reconstructing [ns name] vector
+                                   ;; from `disabled-fq-sym`, compare string
+                                   ;; values directly for efficiency.
+                                   (and (= (some-> (nth frame 0 nil) name) disabled-ns)
+                                        (= (some-> (nth frame 1 nil) name) disabled-name)))
+                                 callstack)))
+                (skip-args config linter))))
 
 (defn lint-as [config v]
   (some-> (get-in config [:lint-as v])
@@ -367,18 +392,18 @@
         (contains? (:excluded-vars cfg) [ns-sym fn-sym]))))
 
 (defn deprecated-var-excluded [ctx config var-sym excluded-ns excluded-in-def]
-  (let [{:keys [:namespace-regexes :namespace-syms
-                :def-regexes :def-syms]} (let [excluded (get-in config [:linters :deprecated-var :exclude var-sym])
-                                               namespaces (:namespaces excluded)
-                                               namespace-regexes (filter string? namespaces)
-                                               namespace-syms (set (filter symbol? namespaces))
-                                               defs (:defs excluded)
-                                               def-regexes (filter string? defs)
-                                               def-syms (set (filter symbol? defs))]
-                                           {:namespace-regexes namespace-regexes
-                                            :namespace-syms namespace-syms
-                                            :def-regexes def-regexes
-                                            :def-syms def-syms})
+  (let [{:keys [namespace-regexes namespace-syms
+                def-regexes def-syms]} (let [excluded (get-in config [:linters :deprecated-var :exclude var-sym])
+                                             namespaces (:namespaces excluded)
+                                             namespace-regexes (filter string? namespaces)
+                                             namespace-syms (set (filter symbol? namespaces))
+                                             defs (:defs excluded)
+                                             def-regexes (filter string? defs)
+                                             def-syms (set (filter symbol? defs))]
+                                         {:namespace-regexes namespace-regexes
+                                          :namespace-syms namespace-syms
+                                          :def-regexes def-regexes
+                                          :def-syms def-syms})
         re-find (:re-find-memo ctx)]
     (or (when excluded-in-def
           (let [excluded-in-def (symbol (str excluded-ns) (str excluded-in-def))]
@@ -416,7 +441,7 @@
                    (cond-> nil
                      exclude (assoc :exclude exclude)
                      include (assoc :include include)))]
-    (let [{:keys [:exclude :include]} cfg]
+    (let [{:keys [exclude include]} cfg]
       (if include
         (not (contains? include sym))
         (or (not exclude)
@@ -479,17 +504,16 @@
         (let [binding-str (str binding-sym)]
           (boolean (some #(re-find % binding-str) regexes))))))
 
-(defn ns-groups [ctx config ns-name filename]
+(defn ns-groups-eduction [ctx config ns-name filename]
   (let [ns-groups-matcher (:re-find-memo ctx)]
-    (keep (fn [{:keys [pattern
-                       filename-pattern
-                       name]}]
-            (when (or (and (string? pattern) (symbol? name)
-                           (ns-groups-matcher pattern (str ns-name)))
-                      (and (string? filename-pattern) (symbol? name)
-                           (ns-groups-matcher filename-pattern filename)))
-              name))
-          (:ns-groups config))))
+    (utils/eduction
+     (keep (fn [{:keys [pattern filename-pattern name]}]
+             (when (or (and (string? pattern) (symbol? name)
+                            (ns-groups-matcher pattern (str ns-name)))
+                       (and (string? filename-pattern) (symbol? name)
+                            (ns-groups-matcher filename-pattern filename)))
+               name)))
+                    (:ns-groups config))))
 
 (defn unquote [coll]
   (walk/postwalk
@@ -500,12 +524,17 @@
        x))
    coll))
 
-(defn deprecated-namespace-excluded-config [config ]
+(defn deprecated-namespace-excluded-config [config]
   (let [excluded (get-in config [:linters :deprecated-namespace :exclude])]
     (set excluded)))
 
 (defn deprecated-namespace-excluded? [config required]
   (contains? config required))
+
+(defn cljc-features
+  [config]
+  (or (some-> config :cljc :features)
+      [:clj :cljs]))
 
 ;;;; Scratch
 

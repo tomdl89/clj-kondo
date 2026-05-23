@@ -21,7 +21,7 @@
   (io/file cache-dir (name lang) (str ns-sym ".transit.json")))
 
 (defn from-cache-1 [cache-dir lang ns-sym]
-  (when-let [{:keys [:resource :source]}
+  (when-let [{:keys [resource source]}
              (or (when cache-dir
                    (let [f (cache-file cache-dir lang ns-sym)]
                      (when (.exists f)
@@ -113,6 +113,16 @@
      (.lock thread-lock)
      (try ~@body
           (finally (.unlock thread-lock)))))
+
+(defmacro with-named-lock
+  "Bind `*lock-file-name*` to `lock-name` and acquire both the thread
+  and file-based locks under `cache-dir` for `body`. `max-retries`
+  is forwarded to `with-cache`."
+  [lock-name cache-dir max-retries & body]
+  `(binding [*lock-file-name* ~lock-name]
+     (with-thread-lock
+       (with-cache ~cache-dir ~max-retries
+         ~@body))))
 
 (defn load-when-missing [idacs cache-dir lang ns-sym]
   (if (string? (-> ns-sym meta :raw-name))

@@ -28,22 +28,25 @@
     :list (map-without-nils #(key-value % in-quote?) (:children node))
     :set (some-> (map-without-nils #(key-value % in-quote?) (:children node))
                  (set))
-    :map (some->> (map-without-nils #(key-value % in-quote?) (:children node))
-                  (apply hash-map))
+    :map (when (even? (count (:children node)))
+           (some->> (map-without-nils #(key-value % in-quote?) (:children node))
+                    (apply hash-map)))
     :quote (recur (first (:children node)) true)
     nil))
 
 (defn lint-map-keys
   ([ctx expr]
    (lint-map-keys ctx expr nil))
-  ([ctx expr {:keys [:known-key?] :or {known-key? (constantly true)}}]
-   (let [filename (:filename ctx)
+  ([ctx expr opts]
+   (let [{:keys [known-key?]} opts
+         known-key? (or known-key? (constantly true))
+         filename (:filename ctx)
          t (tag expr)
          children (if (= :namespaced-map t)
                     (-> expr :children first :children)
                     (:children expr))]
      (reduce
-      (fn [{:keys [:seen] :as acc} key-expr]
+      (fn [{:keys [seen] :as acc} key-expr]
         (if-let [k (key-value key-expr false)]
           (do
             (when (contains? seen k)
@@ -76,7 +79,7 @@
 (defn lint-set [ctx expr]
   (let [children (:children expr)]
     (reduce
-     (fn [{:keys [:seen] :as acc} set-element]
+     (fn [{:keys [seen] :as acc} set-element]
        (if-let [k (key-value set-element false)]
          (do (when (contains? seen k)
                (findings/reg-finding!
